@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RL Traffic Light Simulator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <div id="canvas-container"></div>
+      <div id="hud-overlay">
+        <header class="hud-header">
+          <div class="hud-title">
+            <span class="hud-badge">Phase 3</span>
+            <h1>RL Traffic Light Simulator</h1>
+          </div>
+
+          <!-- Simulation Controls Toolbar -->
+          <div class="sim-toolbar" id="sim-toolbar">
+            <button class="btn-tool" id="btn-sim-playpause" title="Play or Pause Simulation">⏸ Pause</button>
+            <button class="btn-tool" id="btn-sim-reset" title="Reset Simulation">↺ Reset</button>
+            <div class="speed-selector">
+              <span class="toolbar-label">SPEED:</span>
+              <button class="btn-speed active" data-speed="1" id="btn-speed-1x">1x</button>
+              <button class="btn-speed" data-speed="2" id="btn-speed-2x">2x</button>
+              <button class="btn-speed" data-speed="5" id="btn-speed-5x">5x</button>
+            </div>
+          </div>
+
+          <!-- Camera Preset Toolbar -->
+          <div class="camera-toolbar" id="camera-toolbar">
+            <span class="toolbar-label">VIEW:</span>
+            <button class="btn-preset active" data-preset="isometric" id="btn-cam-iso">Isometric</button>
+            <button class="btn-preset" data-preset="overhead" id="btn-cam-overhead">Overhead</button>
+            <button class="btn-preset" data-preset="street" id="btn-cam-street">Street</button>
+          </div>
+
+          <div class="hud-status" id="system-status">
+            <span class="status-dot"></span> Traffic Engine Active
+          </div>
+        </header>
+
+        <main class="hud-main">
+          <div class="welcome-card" id="welcome-card">
+            <div class="card-header">
+              <h2>Traffic Simulation Telemetry</h2>
+              <button class="btn-toggle" id="btn-toggle-hud" aria-label="Toggle panel">−</button>
+            </div>
+            <div class="card-body" id="card-body">
+              <p>Deterministic IDM kinematics, stop-line queues & signal rules.</p>
+              
+              <!-- Live Metrics Display -->
+              <div class="module-checks">
+                <div class="check-item">
+                  <span>Active Vehicles</span>
+                  <span class="badge metric-value" id="metric-active-count">0</span>
+                </div>
+                <div class="check-item">
+                  <span>Vehicles Cleared</span>
+                  <span class="badge metric-value" id="metric-passed-count">0</span>
+                </div>
+                <div class="check-item">
+                  <span>Current Phase</span>
+                  <span class="badge phase-badge" id="metric-signal-phase">NS Green</span>
+                </div>
+                <div class="check-item">
+                  <span>Avg Wait Time</span>
+                  <span class="badge metric-value" id="metric-avg-wait">0.0s</span>
+                </div>
+              </div>
+
+              <!-- Signal Safety & State Request Section -->
+              <div class="signal-test-section">
+                <div class="test-label">SAFE SIGNAL CONTROLS:</div>
+                <div class="signal-btn-group">
+                  <button class="btn-sig" id="btn-sig-ns-green">Request NS Green (Safe)</button>
+                  <button class="btn-sig" id="btn-sig-ew-green">Request EW Green (Safe)</button>
+                  <button class="btn-sig" id="btn-sig-toggle-cycle">Cycle: Auto (20s)</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
