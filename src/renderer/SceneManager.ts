@@ -3,6 +3,7 @@ import { RoadRenderer, DEFAULT_ROAD_DIMENSIONS, RoadDimensions } from './RoadRen
 import { TrafficLightMesh } from './TrafficLightMesh';
 import { CameraController } from './CameraController';
 import { VehicleMeshPool } from './VehicleMeshPool';
+import { SpeedCameraMesh } from './SpeedCameraMesh';
 import { TrafficEnvironment } from '../sim/TrafficEnvironment';
 import { Direction, LightState } from '../types';
 
@@ -13,7 +14,7 @@ export interface SceneManagerOptions {
 
 /**
  * Coordinates the Three.js scene, camera, lighting, renderer, traffic signals,
- * vehicle mesh pool, and connects to the headless TrafficEnvironment.
+ * speed cameras, vehicle mesh pool, and connects to the headless TrafficEnvironment.
  */
 export class SceneManager {
   private container: HTMLElement;
@@ -23,6 +24,7 @@ export class SceneManager {
   private roadRenderer: RoadRenderer;
   private cameraController: CameraController;
   private trafficLights: Map<Direction, TrafficLightMesh> = new Map();
+  private speedCameraMeshes: Map<string, SpeedCameraMesh> = new Map();
   private vehicleMeshPool: VehicleMeshPool;
   private trafficEnvironment: TrafficEnvironment;
 
@@ -79,11 +81,14 @@ export class SceneManager {
       this.trafficEnvironment.getLaneNetwork()
     );
 
-    // 9. Event listeners
+    // 9. Speed Enforcement 3D Cameras setup
+    this.setupSpeedCameras();
+
+    // 10. Event listeners
     this.onResizeBound = this.handleResize.bind(this);
     window.addEventListener('resize', this.onResizeBound);
 
-    // 10. Start animation loop
+    // 11. Start animation loop
     this.animate = this.animate.bind(this);
     this.start();
   }
@@ -171,6 +176,23 @@ export class SceneManager {
     });
   }
 
+  private setupSpeedCameras(): void {
+    const cameraDefs = this.trafficEnvironment.getSpeedCameras();
+    cameraDefs.forEach(def => {
+      const cameraMesh = new SpeedCameraMesh(def);
+      this.speedCameraMeshes.set(def.id, cameraMesh);
+      this.scene.add(cameraMesh.getRoot());
+    });
+
+    // Wire speed enforcement violation strobe flash
+    this.trafficEnvironment.getSpeedEnforcement().onViolationDetected = record => {
+      const mesh = this.speedCameraMeshes.get(record.cameraId);
+      if (mesh) {
+        mesh.triggerViolationFlash();
+      }
+    };
+  }
+
   private handleResize(): void {
     if (this.isDisposed) return;
     const width = this.container.clientWidth;
@@ -198,16 +220,22 @@ export class SceneManager {
     // 2. Advance headless traffic physics
     this.trafficEnvironment.step(delta);
 
-    // 3. Sync 3D vehicle meshes with simulation vehicles
-    this.vehicleMeshPool.sync(this.trafficEnvironment.getVehicles());
+    // 3. Update speed cameras flash timers
+    this.speedCameraMeshes.forEach(mesh => mesh.update(delta));
 
-    // 4. Sync 3D traffic light meshes with simulation signals
+    // 4. Sync 3D vehicle meshes with simulation vehicles & sim time
+    this.vehicleMeshPool.sync(
+      this.trafficEnvironment.getVehicles(),
+      this.trafficEnvironment.getSimSeconds()
+    );
+
+    // 5. Sync 3D traffic light meshes with simulation signals
     const signals = this.trafficEnvironment.getSignalStates();
     signals.forEach((state, dir) => {
       this.setSignalState(dir, state);
     });
 
-    // 5. Render Three.js frame
+    // 6. Render Three.js frame
     this.render();
 
     this.animationFrameId = requestAnimationFrame(this.animate);
@@ -260,6 +288,10 @@ export class SceneManager {
     this.trafficLights.forEach(light => light.setSignalState(state));
   }
 
+  public getSpeedCameraMeshes(): Map<string, SpeedCameraMesh> {
+    return this.speedCameraMeshes;
+  }
+
   public resetSimulation(): void {
     this.trafficEnvironment.reset();
     this.vehicleMeshPool.clear();
@@ -283,6 +315,12 @@ export class SceneManager {
       light.dispose();
     });
     this.trafficLights.clear();
+
+    this.speedCameraMeshes.forEach(cam => {
+      this.scene.remove(cam.getRoot());
+      cam.dispose();
+    });
+    this.speedCameraMeshes.clear();
 
     this.vehicleMeshPool.dispose();
     this.cameraController.dispose();

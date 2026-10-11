@@ -117,11 +117,51 @@ function initApp(): void {
         });
       }
 
-      // 5. Telemetry HUD Polling (updated at 10 Hz)
+      // 5. Emergency Vehicles & Priority Controls
+      const btnSpawnAmbulance = document.getElementById('btn-spawn-ambulance');
+      const btnSpawnPolice = document.getElementById('btn-spawn-police');
+      const btnReqPriority = document.getElementById('btn-req-priority');
+
+      if (btnSpawnAmbulance) {
+        btnSpawnAmbulance.addEventListener('click', () => {
+          env.spawnEmergencyVehicle('ambulance', undefined, true);
+        });
+      }
+
+      if (btnSpawnPolice) {
+        btnSpawnPolice.addEventListener('click', () => {
+          env.spawnEmergencyVehicle('police', undefined, false);
+        });
+      }
+
+      if (btnReqPriority) {
+        btnReqPriority.addEventListener('click', () => {
+          env.requestEmergencyPriority();
+        });
+      }
+
+      // 6. Telemetry HUD Polling (updated at 10 Hz)
       const activeCountEl = document.getElementById('metric-active-count');
       const passedCountEl = document.getElementById('metric-passed-count');
       const phaseBadgeEl = document.getElementById('metric-signal-phase');
       const avgWaitEl = document.getElementById('metric-avg-wait');
+
+      // Enforcement & Emergency elements
+      const cameraCountEl = document.getElementById('metric-camera-count');
+      const violationCountEl = document.getElementById('metric-violation-count');
+      const violationEntriesEl = document.getElementById('violation-entries');
+      const emergencyBadgeEl = document.getElementById('badge-emergency-status');
+
+      // Fleet count elements
+      const fleetEls: Record<string, HTMLElement | null> = {
+        sedan: document.getElementById('fleet-sedan'),
+        hatchback: document.getElementById('fleet-hatchback'),
+        suv: document.getElementById('fleet-suv'),
+        taxi: document.getElementById('fleet-taxi'),
+        van: document.getElementById('fleet-van'),
+        police: document.getElementById('fleet-police'),
+        ambulance: document.getElementById('fleet-ambulance')
+      };
 
       const phaseNames: Record<SignalPhase, { text: string; cssClass: string }> = {
         [SignalPhase.NORTH_SOUTH_GREEN]: { text: 'NS Green', cssClass: '' },
@@ -153,6 +193,55 @@ function initApp(): void {
           const info = phaseNames[signalCtrl.getPhase()];
           phaseBadgeEl.textContent = info.text;
           phaseBadgeEl.className = `badge phase-badge ${info.cssClass}`.trim();
+        }
+
+        // Speed Enforcement Telemetry
+        const speedCameras = env.getSpeedCameras();
+        const violations = env.getViolations();
+
+        if (cameraCountEl) {
+          cameraCountEl.textContent = String(speedCameras.length);
+        }
+        if (violationCountEl) {
+          violationCountEl.textContent = String(violations.length);
+        }
+
+        if (violationEntriesEl) {
+          if (violations.length === 0) {
+            violationEntriesEl.innerHTML = '<div class="no-violations-hint">No speeding violations detected yet.</div>';
+          } else {
+            // Show recent 3 violations
+            const recent = violations.slice(-3).reverse();
+            violationEntriesEl.innerHTML = recent
+              .map(
+                v => `
+                <div class="violation-item">
+                  <span>${v.vehicleType.toUpperCase()} (${v.cameraId.replace('cam_', '')})</span>
+                  <span><b>${v.measuredSpeedKmh} km/h</b> (+${v.excessSpeedKmh})</span>
+                </div>`
+              )
+              .join('');
+          }
+        }
+
+        // Emergency Vehicle Telemetry
+        const emergencyInfo = env.getActiveEmergencyInfo();
+        if (emergencyBadgeEl) {
+          if (emergencyInfo) {
+            emergencyBadgeEl.textContent = `🚨 ${emergencyInfo.type.toUpperCase()} on ${emergencyInfo.direction} (${emergencyInfo.distanceToStopLine}m)`;
+            emergencyBadgeEl.className = 'badge emergency-badge-status active';
+          } else {
+            emergencyBadgeEl.textContent = 'Status: Normal';
+            emergencyBadgeEl.className = 'badge emergency-badge-status';
+          }
+        }
+
+        // Fleet Distribution Telemetry
+        const fleetDist = env.getFleetDistribution();
+        for (const [key, el] of Object.entries(fleetEls)) {
+          if (el) {
+            el.textContent = String((fleetDist as any)[key] ?? 0);
+          }
         }
       }, 100);
     } catch (err) {

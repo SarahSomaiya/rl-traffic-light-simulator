@@ -2,7 +2,17 @@ import { LaneNetwork } from './Lane';
 import { Vehicle } from './Vehicle';
 import { SignalController } from './SignalController';
 import { Spawner } from './Spawner';
-import { SimulationMetrics, Direction, LightState } from '../types';
+import { SpeedEnforcementManager } from './SpeedEnforcement';
+import {
+  SimulationMetrics,
+  Direction,
+  LightState,
+  FleetDistributionMetrics,
+  EmergencyStatusInfo,
+  SpeedViolationRecord,
+  SpeedCameraDefinition,
+  SignalPhase
+} from '../types';
 
 export interface TrafficEnvironmentConfig {
   fixedTimestep: number; // Physics tick rate (default 0.05s)
@@ -17,19 +27,24 @@ export const DEFAULT_ENV_CONFIG: TrafficEnvironmentConfig = {
 };
 
 /**
- * Headless Traffic Simulation Environment.
- * Runs deterministic fixed-timestep traffic physics independently of rendering.
+ * Headless Traffic Simulation Environment (Phase 3.5).
+ * Coordinates deterministic kinematics, vehicle fleet diversity, emergency vehicle status,
+ * speed limit enforcement, and safe signal transitions.
  */
 export class TrafficEnvironment {
   private config: TrafficEnvironmentConfig;
   private laneNetwork: LaneNetwork;
   private signalController: SignalController;
   private spawner: Spawner;
+  private speedEnforcement: SpeedEnforcementManager;
 
   private vehicles: Vehicle[] = [];
   private totalSpawned: number = 0;
   private totalPassed: number = 0;
   private elapsedSimSeconds: number = 0;
+
+  // Track positions prior to kinematics update for camera detection lines
+  private prevPositions: Map<string, number> = new Map();
 
   // Simulation controls state
   private paused: boolean = false;
@@ -41,6 +56,7 @@ export class TrafficEnvironment {
     this.laneNetwork = new LaneNetwork(this.config.roadHalfLength, this.config.stopLineOffset);
     this.signalController = new SignalController();
     this.spawner = new Spawner(this.laneNetwork, {}, seed);
+    this.speedEnforcement = new SpeedEnforcementManager();
   }
 
   public getLaneNetwork(): LaneNetwork {
@@ -51,8 +67,20 @@ export class TrafficEnvironment {
     return this.signalController;
   }
 
+  public getSpawner(): Spawner {
+    return this.spawner;
+  }
+
+  public getSpeedEnforcement(): SpeedEnforcementManager {
+    return this.speedEnforcement;
+  }
+
   public getVehicles(): Vehicle[] {
     return this.vehicles;
+  }
+
+  public getSimSeconds(): number {
+    return this.elapsedSimSeconds;
   }
 
   public isPaused(): boolean {
@@ -89,10 +117,100 @@ export class TrafficEnvironment {
     return map;
   }
 
+  public getSpeedCameras(): SpeedCameraDefinition[] {
+    return this.speedEnforcement.getCameras();
+  }
+
+  public getViolations(): SpeedViolationRecord[] {
+    return this.speedEnforcement.getViolations();
+  }
+
+  /**
+   * Spawns an emergency vehicle on demand (e.g. for testing or UI trigger).
+   */
+  public spawnEmergencyVehicle(
+    type: 'ambulance' | 'police' = 'ambulance',
+    direction: Direction = Direction.SOUTH,
+    isEmergencyActive: boolean = true
+  ): Vehicle | null {
+    const v = this.spawner.spawnSpecificVehicle(type, this.vehicles, direction, isEmergencyActive);
+    if (v) {
+      this.vehicles.push(v);
+      this.totalSpawned++;
+    }
+    return v;
+  }
+
+  /**
+   * Safe Priority-Request Interface for emergency vehicles.
+   * If an active emergency vehicle requests green on its approach, registers a safe
+   * phase change with SignalController. The controller still enforces minimum green,
+   * yellow clearance, and all-red buffer, preventing conflicting green movements.
+   */
+  public requestEmergencyPriority(): boolean {
+    const activeEmergency = this.getActiveEmergencyInfo();
+    if (!activeEmergency) return false;
+
+    const isNorthSouth =
+      activeEmergency.direction === Direction.NORTH ||
+      activeEmergency.direction === Direction.SOUTH;
+
+    const targetPhase = isNorthSouth
+      ? SignalPhase.NORTH_SOUTH_GREEN
+      : SignalPhase.EAST_WEST_GREEN;
+
+    return this.signalController.requestPhase(targetPhase);
+  }
+
+  /**
+   * Returns metadata about currently active emergency vehicles.
+   */
+  public getActiveEmergencyInfo(): EmergencyStatusInfo | null {
+    const emergencyVehicle = this.vehicles.find(v => v.isEmergencyActive);
+    if (!emergencyVehicle) return null;
+
+    const lane = this.laneNetwork.getLane(emergencyVehicle.laneId);
+    if (!lane) return null;
+
+    const distToStop = Math.max(0, lane.stopLineDistance - emergencyVehicle.s);
+    const light = this.signalController.getLightState(lane.direction);
+
+    return {
+      vehicleId: emergencyVehicle.id,
+      type: emergencyVehicle.type,
+      isEmergencyActive: true,
+      laneId: emergencyVehicle.laneId,
+      direction: lane.direction,
+      distanceToStopLine: parseFloat(distToStop.toFixed(1)),
+      isWaitingAtRed: light === 'red' && distToStop < 15.0 && emergencyVehicle.v < 0.5
+    };
+  }
+
+  /**
+   * Returns current count breakdown of active vehicles by type.
+   */
+  public getFleetDistribution(): FleetDistributionMetrics {
+    const counts: FleetDistributionMetrics = {
+      hatchback: 0,
+      sedan: 0,
+      suv: 0,
+      taxi: 0,
+      police: 0,
+      ambulance: 0,
+      van: 0
+    };
+
+    for (const v of this.vehicles) {
+      if (counts[v.type] !== undefined) {
+        counts[v.type]++;
+      }
+    }
+
+    return counts;
+  }
+
   /**
    * Advances the simulation using an accumulator of fixed timesteps.
-   *
-   * @param wallDelta Time elapsed in real-world seconds
    */
   public step(wallDelta: number): void {
     if (this.paused) return;
@@ -125,7 +243,13 @@ export class TrafficEnvironment {
       this.totalSpawned += newVehicles.length;
     }
 
-    // 3. Group vehicles by lane and sort them by longitudinal distance s descending (furthest first)
+    // 3. Cache previous positions for speed camera detection
+    this.prevPositions.clear();
+    for (const v of this.vehicles) {
+      this.prevPositions.set(v.id, v.s);
+    }
+
+    // 4. Group vehicles by lane and sort them by longitudinal distance s descending (furthest first)
     const laneMap = new Map<string, Vehicle[]>();
     for (const v of this.vehicles) {
       let list = laneMap.get(v.laneId);
@@ -136,7 +260,7 @@ export class TrafficEnvironment {
       list.push(v);
     }
 
-    // 4. Update kinematics for each lane
+    // 5. Update kinematics for each lane
     const remainingVehicles: Vehicle[] = [];
 
     laneMap.forEach((laneVehicles, laneId) => {
@@ -146,12 +270,13 @@ export class TrafficEnvironment {
       if (!lane) return;
 
       const lightState = this.signalController.getLightState(lane.direction);
+      const laneSpeedLimitMs = this.speedEnforcement.getSpeedLimitMsForLane(laneId);
 
       for (let i = 0; i < laneVehicles.length; i++) {
         const vehicle = laneVehicles[i];
         const leadVehicle = i > 0 ? laneVehicles[i - 1] : null;
 
-        vehicle.update(dt, leadVehicle, lane.stopLineDistance, lightState);
+        vehicle.update(dt, leadVehicle, lane.stopLineDistance, lightState, laneSpeedLimitMs);
 
         // Check if vehicle has reached the end of the road
         if (vehicle.s < lane.length) {
@@ -163,6 +288,13 @@ export class TrafficEnvironment {
     });
 
     this.vehicles = remainingVehicles;
+
+    // 6. Check speed cameras for violations
+    this.speedEnforcement.checkSpeedViolations(
+      this.vehicles,
+      this.prevPositions,
+      this.elapsedSimSeconds
+    );
   }
 
   /**
@@ -204,7 +336,9 @@ export class TrafficEnvironment {
     this.totalPassed = 0;
     this.elapsedSimSeconds = 0;
     this.accumulator = 0;
+    this.prevPositions.clear();
     this.signalController.reset();
     this.spawner.reset(seed);
+    this.speedEnforcement.reset();
   }
 }
