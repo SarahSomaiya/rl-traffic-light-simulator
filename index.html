@@ -1,154 +1,168 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>RL Traffic Light Simulator</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
-      rel="stylesheet"
-    />
-  </head>
-  <body>
-    <div id="app">
-      <div id="canvas-container"></div>
-      <div id="hud-overlay">
-        <header class="hud-header">
-          <div class="hud-title">
-            <span class="hud-badge">Phase 3.5</span>
-            <h1>RL Traffic Light Simulator</h1>
-          </div>
 
-          <!-- Simulation Controls Toolbar -->
-          <div class="sim-toolbar" id="sim-toolbar">
-            <button class="btn-tool" id="btn-sim-playpause" title="Play or Pause Simulation">⏸ Pause</button>
-            <button class="btn-tool" id="btn-sim-reset" title="Reset Simulation">↺ Reset</button>
-            <div class="speed-selector">
-              <span class="toolbar-label">SPEED:</span>
-              <button class="btn-speed active" data-speed="1" id="btn-speed-1x">1x</button>
-              <button class="btn-speed" data-speed="2" id="btn-speed-2x">2x</button>
-              <button class="btn-speed" data-speed="5" id="btn-speed-5x">5x</button>
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RL Traffic Light Simulator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap"
+    rel="stylesheet" />
+</head>
+
+<body>
+  <div id="app">
+    <div id="canvas-container"></div>
+    <div id="hud-overlay">
+      <header class="hud-header">
+        <div class="hud-title">
+          <span class="hud-badge">Phase 2: Day/Night & Ambience</span>
+          <h1>RL Traffic Light Simulator</h1>
+        </div>
+
+        <!-- Simulation Controls Toolbar -->
+        <div class="sim-toolbar" id="sim-toolbar">
+          <button class="btn-tool" id="btn-sim-playpause" title="Play or Pause Simulation">⏸ Pause</button>
+          <button class="btn-tool" id="btn-sim-reset" title="Reset Simulation">↺ Reset</button>
+          <div class="speed-selector">
+            <span class="toolbar-label">SPEED:</span>
+            <button class="btn-speed active" data-speed="1" id="btn-speed-1x">1x</button>
+            <button class="btn-speed" data-speed="2" id="btn-speed-2x">2x</button>
+            <button class="btn-speed" data-speed="5" id="btn-speed-5x">5x</button>
+          </div>
+        </div>
+
+        <!-- Camera Preset Toolbar -->
+        <div class="camera-toolbar" id="camera-toolbar">
+          <span class="toolbar-label">VIEW:</span>
+          <button class="btn-preset active" data-preset="isometric" id="btn-cam-iso">Isometric</button>
+          <button class="btn-preset" data-preset="overhead" id="btn-cam-overhead">Overhead</button>
+          <button class="btn-preset" data-preset="street" id="btn-cam-street">Street</button>
+        </div>
+
+        <!-- Environment & Ambience Toolbar -->
+        <div class="env-toolbar" id="env-toolbar">
+          <button class="btn-tool" id="btn-env-daynight" title="Toggle Day or Night Mode">
+            <span id="env-icon">☀️</span> <span id="env-text">Day</span>
+          </button>
+          <button class="btn-tool" id="btn-audio-ambience" title="Toggle Traffic Ambience Audio">
+            <span id="audio-icon">🔇</span> <span id="audio-text">Muted</span>
+          </button>
+        </div>
+
+        <div class="hud-status" id="system-status">
+          <span class="status-dot"></span> Traffic & Enforcement Active
+        </div>
+      </header>
+
+      <main class="hud-main">
+        <div class="welcome-card" id="welcome-card">
+          <div class="card-header">
+            <h2>Traffic Simulation & Enforcement</h2>
+            <button class="btn-toggle" id="btn-toggle-hud" aria-label="Toggle panel">−</button>
+          </div>
+          <div class="card-body" id="card-body">
+            <p>Fleet diversity, emergency vehicles, 3D speed cameras & IDM kinematics.</p>
+
+            <!-- Live Metrics Display -->
+            <div class="module-checks">
+              <div class="check-item">
+                <span>Active Vehicles</span>
+                <span class="badge metric-value" id="metric-active-count">0</span>
+              </div>
+              <div class="check-item">
+                <span>Vehicles Cleared</span>
+                <span class="badge metric-value" id="metric-passed-count">0</span>
+              </div>
+              <div class="check-item">
+                <span>Current Phase</span>
+                <span class="badge phase-badge" id="metric-signal-phase">NS Green</span>
+              </div>
+              <div class="check-item">
+                <span>Avg Wait Time</span>
+                <span class="badge metric-value" id="metric-avg-wait">0.0s</span>
+              </div>
             </div>
-          </div>
 
-          <!-- Camera Preset Toolbar -->
-          <div class="camera-toolbar" id="camera-toolbar">
-            <span class="toolbar-label">VIEW:</span>
-            <button class="btn-preset active" data-preset="isometric" id="btn-cam-iso">Isometric</button>
-            <button class="btn-preset" data-preset="overhead" id="btn-cam-overhead">Overhead</button>
-            <button class="btn-preset" data-preset="street" id="btn-cam-street">Street</button>
-          </div>
-
-          <div class="hud-status" id="system-status">
-            <span class="status-dot"></span> Traffic & Enforcement Active
-          </div>
-        </header>
-
-        <main class="hud-main">
-          <div class="welcome-card" id="welcome-card">
-            <div class="card-header">
-              <h2>Traffic Simulation & Enforcement</h2>
-              <button class="btn-toggle" id="btn-toggle-hud" aria-label="Toggle panel">−</button>
-            </div>
-            <div class="card-body" id="card-body">
-              <p>Fleet diversity, emergency vehicles, 3D speed cameras & IDM kinematics.</p>
-              
-              <!-- Live Metrics Display -->
-              <div class="module-checks">
-                <div class="check-item">
-                  <span>Active Vehicles</span>
-                  <span class="badge metric-value" id="metric-active-count">0</span>
+            <!-- Speed Enforcement Dashboard -->
+            <div class="enforcement-section">
+              <div class="section-title-row">
+                <span class="test-label">SPEED ENFORCEMENT & CAMERAS</span>
+                <span class="badge limit-badge" id="badge-speed-limit">Limit: 40 km/h (±2 km/h)</span>
+              </div>
+              <div class="enforcement-stats-row">
+                <div class="stat-pill">
+                  <span class="stat-label">Active Cameras:</span>
+                  <span class="stat-val" id="metric-camera-count">4</span>
                 </div>
-                <div class="check-item">
-                  <span>Vehicles Cleared</span>
-                  <span class="badge metric-value" id="metric-passed-count">0</span>
-                </div>
-                <div class="check-item">
-                  <span>Current Phase</span>
-                  <span class="badge phase-badge" id="metric-signal-phase">NS Green</span>
-                </div>
-                <div class="check-item">
-                  <span>Avg Wait Time</span>
-                  <span class="badge metric-value" id="metric-avg-wait">0.0s</span>
+                <div class="stat-pill">
+                  <span class="stat-label">Total Violations:</span>
+                  <span class="stat-val alert-val" id="metric-violation-count">0</span>
                 </div>
               </div>
 
-              <!-- Speed Enforcement Dashboard -->
-              <div class="enforcement-section">
-                <div class="section-title-row">
-                  <span class="test-label">SPEED ENFORCEMENT & CAMERAS</span>
-                  <span class="badge limit-badge" id="badge-speed-limit">Limit: 40 km/h (±2 km/h)</span>
-                </div>
-                <div class="enforcement-stats-row">
-                  <div class="stat-pill">
-                    <span class="stat-label">Active Cameras:</span>
-                    <span class="stat-val" id="metric-camera-count">4</span>
-                  </div>
-                  <div class="stat-pill">
-                    <span class="stat-label">Total Violations:</span>
-                    <span class="stat-val alert-val" id="metric-violation-count">0</span>
-                  </div>
-                </div>
-
-                <div class="violation-log-box" id="violation-log-box">
-                  <div class="violation-header">Recent Camera Captures:</div>
-                  <div class="violation-entries" id="violation-entries">
-                    <div class="no-violations-hint">No speeding violations detected yet.</div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Emergency Vehicles & Fleet Controls -->
-              <div class="emergency-section">
-                <div class="section-title-row">
-                  <span class="test-label">EMERGENCY RESPONSE & PRIORITY</span>
-                  <span class="badge emergency-badge-status" id="badge-emergency-status">Status: Normal</span>
-                </div>
-
-                <div class="emergency-btn-group">
-                  <button class="btn-emergency" id="btn-spawn-ambulance" title="Spawn responding ambulance on South approach">
-                    🚑 Spawn Ambulance
-                  </button>
-                  <button class="btn-emergency" id="btn-spawn-police" title="Spawn patrol police vehicle">
-                    🚓 Spawn Police
-                  </button>
-                  <button class="btn-emergency priority-btn" id="btn-req-priority" title="Request green clearance via safe state machine">
-                    🚨 Safe Signal Priority
-                  </button>
-                </div>
-              </div>
-
-              <!-- Fleet Distribution Breakdown -->
-              <div class="fleet-breakdown-section">
-                <div class="test-label">FLEET COMPOSITION:</div>
-                <div class="fleet-pills" id="fleet-pills">
-                  <span class="fleet-pill">Sedan: <b id="fleet-sedan">0</b></span>
-                  <span class="fleet-pill">Hatchback: <b id="fleet-hatchback">0</b></span>
-                  <span class="fleet-pill">SUV: <b id="fleet-suv">0</b></span>
-                  <span class="fleet-pill">Taxi: <b id="fleet-taxi">0</b></span>
-                  <span class="fleet-pill">Van: <b id="fleet-van">0</b></span>
-                  <span class="fleet-pill">Police: <b id="fleet-police">0</b></span>
-                  <span class="fleet-pill">Ambulance: <b id="fleet-ambulance">0</b></span>
-                </div>
-              </div>
-
-              <!-- Signal Safety & State Request Section -->
-              <div class="signal-test-section">
-                <div class="test-label">MANUAL SIGNAL CONTROLS:</div>
-                <div class="signal-btn-group">
-                  <button class="btn-sig" id="btn-sig-ns-green">Request NS Green (Safe)</button>
-                  <button class="btn-sig" id="btn-sig-ew-green">Request EW Green (Safe)</button>
-                  <button class="btn-sig" id="btn-sig-toggle-cycle">Cycle: Auto (20s)</button>
+              <div class="violation-log-box" id="violation-log-box">
+                <div class="violation-header">Recent Camera Captures:</div>
+                <div class="violation-entries" id="violation-entries">
+                  <div class="no-violations-hint">No speeding violations detected yet.</div>
                 </div>
               </div>
             </div>
+
+            <!-- Emergency Vehicles & Fleet Controls -->
+            <div class="emergency-section">
+              <div class="section-title-row">
+                <span class="test-label">EMERGENCY RESPONSE & PRIORITY</span>
+                <span class="badge emergency-badge-status" id="badge-emergency-status">Status: Normal</span>
+              </div>
+
+              <div class="emergency-btn-group">
+                <button class="btn-emergency" id="btn-spawn-ambulance"
+                  title="Spawn responding ambulance on South approach">
+                  🚑 Spawn Ambulance
+                </button>
+                <button class="btn-emergency" id="btn-spawn-police" title="Spawn patrol police vehicle">
+                  🚓 Spawn Police
+                </button>
+                <button class="btn-emergency priority-btn" id="btn-req-priority"
+                  title="Request green clearance via safe state machine">
+                  🚨 Safe Signal Priority
+                </button>
+              </div>
+            </div>
+
+            <!-- Fleet Distribution Breakdown -->
+            <div class="fleet-breakdown-section">
+              <div class="test-label">FLEET COMPOSITION:</div>
+              <div class="fleet-pills" id="fleet-pills">
+                <span class="fleet-pill">Sedan: <b id="fleet-sedan">0</b></span>
+                <span class="fleet-pill">Hatchback: <b id="fleet-hatchback">0</b></span>
+                <span class="fleet-pill">SUV: <b id="fleet-suv">0</b></span>
+                <span class="fleet-pill">Taxi: <b id="fleet-taxi">0</b></span>
+                <span class="fleet-pill">Van: <b id="fleet-van">0</b></span>
+                <span class="fleet-pill">Police: <b id="fleet-police">0</b></span>
+                <span class="fleet-pill">Ambulance: <b id="fleet-ambulance">0</b></span>
+              </div>
+            </div>
+
+            <!-- Signal Safety & State Request Section -->
+            <div class="signal-test-section">
+              <div class="test-label">MANUAL SIGNAL CONTROLS:</div>
+              <div class="signal-btn-group">
+                <button class="btn-sig" id="btn-sig-ns-green">Request NS Green (Safe)</button>
+                <button class="btn-sig" id="btn-sig-ew-green">Request EW Green (Safe)</button>
+                <button class="btn-sig" id="btn-sig-toggle-cycle">Cycle: Auto (20s)</button>
+              </div>
+            </div>
           </div>
-        </main>
-      </div>
+        </div>
+      </main>
     </div>
-    <script type="module" src="/src/main.ts"></script>
-  </body>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
 </html>

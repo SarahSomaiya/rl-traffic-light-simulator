@@ -4,6 +4,8 @@ import { TrafficLightMesh } from './TrafficLightMesh';
 import { CameraController } from './CameraController';
 import { VehicleMeshPool } from './VehicleMeshPool';
 import { SpeedCameraMesh } from './SpeedCameraMesh';
+import { EnvironmentController } from './EnvironmentController';
+import { TrafficAmbienceAudio, AudioUpdateContext } from '../audio/TrafficAmbienceAudio';
 import { TrafficEnvironment } from '../sim/TrafficEnvironment';
 import { Direction, LightState } from '../types';
 
@@ -28,6 +30,20 @@ export class SceneManager {
   private vehicleMeshPool: VehicleMeshPool;
   private trafficEnvironment: TrafficEnvironment;
 
+  // Day/Night Environment & Audio Ambience
+  private hemiLight!: THREE.HemisphereLight;
+  private ambientLight!: THREE.AmbientLight;
+  private sunLight!: THREE.DirectionalLight;
+  private fillLight!: THREE.DirectionalLight;
+  private environmentController: EnvironmentController;
+  private ambienceAudio: TrafficAmbienceAudio;
+  private cachedAudioContext: AudioUpdateContext = {
+    hasActiveAmbulance: false,
+    hasActivePolice: false,
+    isNight: false,
+    vehicles: []
+  };
+
   private clock: THREE.Clock = new THREE.Clock();
   private animationFrameId: number | null = null;
   private onResizeBound: () => void;
@@ -38,8 +54,8 @@ export class SceneManager {
 
     // 1. Scene setup
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0f172a);
-    this.scene.fog = new THREE.FogExp2(0x0f172a, 0.0055);
+    this.scene.background = new THREE.Color(0xcad6e2);
+    this.scene.fog = new THREE.Fog(0xcad6e2, 120, 290);
 
     // 2. Camera setup
     const aspect = this.getAspectRatio();
@@ -55,7 +71,7 @@ export class SceneManager {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.1;
 
     // Append canvas to container
     this.container.innerHTML = '';
@@ -84,11 +100,24 @@ export class SceneManager {
     // 9. Speed Enforcement 3D Cameras setup
     this.setupSpeedCameras();
 
-    // 10. Event listeners
+    // 10. Day/Night Environment Controller & Traffic Ambience Audio
+    this.environmentController = new EnvironmentController({
+      scene: this.scene,
+      renderer: this.renderer,
+      hemiLight: this.hemiLight,
+      ambientLight: this.ambientLight,
+      sunLight: this.sunLight,
+      fillLight: this.fillLight,
+      roadRenderer: this.roadRenderer,
+      vehicleMeshPool: this.vehicleMeshPool
+    });
+    this.ambienceAudio = new TrafficAmbienceAudio();
+
+    // 11. Event listeners
     this.onResizeBound = this.handleResize.bind(this);
     window.addEventListener('resize', this.onResizeBound);
 
-    // 11. Start animation loop
+    // 12. Start animation loop
     this.animate = this.animate.bind(this);
     this.start();
   }
@@ -100,35 +129,35 @@ export class SceneManager {
   }
 
   private setupLighting(): void {
-    const hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 0.65);
-    hemiLight.position.set(0, 50, 0);
-    this.scene.add(hemiLight);
+    this.hemiLight = new THREE.HemisphereLight(0xdbeafe, 0x4a7c59, 0.6);
+    this.hemiLight.position.set(0, 50, 0);
+    this.scene.add(this.hemiLight);
 
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.25);
-    this.scene.add(ambientLight);
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.35);
+    this.scene.add(this.ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xfffaed, 1.4);
-    sunLight.position.set(60, 80, 45);
-    sunLight.castShadow = true;
+    this.sunLight = new THREE.DirectionalLight(0xfffaed, 1.45);
+    this.sunLight.position.set(65, 85, 50);
+    this.sunLight.castShadow = true;
 
-    sunLight.shadow.mapSize.width = 2048;
-    sunLight.shadow.mapSize.height = 2048;
-    sunLight.shadow.camera.near = 10;
-    sunLight.shadow.camera.far = 220;
+    this.sunLight.shadow.mapSize.width = 2048;
+    this.sunLight.shadow.mapSize.height = 2048;
+    this.sunLight.shadow.camera.near = 10;
+    this.sunLight.shadow.camera.far = 240;
 
-    const d = 55;
-    sunLight.shadow.camera.left = -d;
-    sunLight.shadow.camera.right = d;
-    sunLight.shadow.camera.top = d;
-    sunLight.shadow.camera.bottom = -d;
-    sunLight.shadow.bias = -0.0004;
-    sunLight.shadow.normalBias = 0.02;
+    const d = 65;
+    this.sunLight.shadow.camera.left = -d;
+    this.sunLight.shadow.camera.right = d;
+    this.sunLight.shadow.camera.top = d;
+    this.sunLight.shadow.camera.bottom = -d;
+    this.sunLight.shadow.bias = -0.0003;
+    this.sunLight.shadow.normalBias = 0.02;
 
-    this.scene.add(sunLight);
+    this.scene.add(this.sunLight);
 
-    const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.35);
-    fillLight.position.set(-50, 40, -50);
-    this.scene.add(fillLight);
+    this.fillLight = new THREE.DirectionalLight(0x7dd3fc, 0.28);
+    this.fillLight.position.set(-50, 45, -50);
+    this.scene.add(this.fillLight);
   }
 
   private setupTrafficLights(): void {
@@ -217,7 +246,21 @@ export class SceneManager {
     // 1. Update camera controls & smooth interpolation
     this.cameraController.update(delta);
 
-    // 2. Advance headless traffic physics
+    // 2. Advance Day/Night environment transition
+    this.environmentController.update(delta);
+
+    // 2b. Advance layered traffic ambience audio (sirens, horns, birds)
+    const vehicles = this.trafficEnvironment.getVehicles();
+    const hasActiveAmbulance = vehicles.some(v => v.type === 'ambulance');
+    const hasActivePolice = vehicles.some(v => v.type === 'police');
+    const isNight = this.environmentController.isNightMode();
+    this.cachedAudioContext.hasActiveAmbulance = hasActiveAmbulance;
+    this.cachedAudioContext.hasActivePolice = hasActivePolice;
+    this.cachedAudioContext.isNight = isNight;
+    this.cachedAudioContext.vehicles = vehicles;
+    this.ambienceAudio.update(delta, this.cachedAudioContext);
+
+    // 3. Advance headless traffic physics
     this.trafficEnvironment.step(delta);
 
     // 3. Update speed cameras flash timers
@@ -292,9 +335,18 @@ export class SceneManager {
     return this.speedCameraMeshes;
   }
 
+  public getEnvironmentController(): EnvironmentController {
+    return this.environmentController;
+  }
+
+  public getAmbienceAudio(): TrafficAmbienceAudio {
+    return this.ambienceAudio;
+  }
+
   public resetSimulation(): void {
     this.trafficEnvironment.reset();
     this.vehicleMeshPool.clear();
+    this.ambienceAudio.reset();
   }
 
   /**
@@ -325,6 +377,8 @@ export class SceneManager {
     this.vehicleMeshPool.dispose();
     this.cameraController.dispose();
     this.roadRenderer.dispose();
+    this.environmentController.dispose();
+    this.ambienceAudio.dispose();
     this.scene.clear();
 
     this.renderer.dispose();

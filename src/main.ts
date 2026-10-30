@@ -65,6 +65,7 @@ function initApp(): void {
           const isPlaying = env.togglePlayPause();
           playPauseBtn.textContent = isPlaying ? '⏸ Pause' : '▶ Play';
           playPauseBtn.classList.toggle('active-pause', !isPlaying);
+          sceneManager?.getAmbienceAudio().setSimulationPaused(!isPlaying);
         });
       }
 
@@ -77,6 +78,33 @@ function initApp(): void {
               playPauseBtn.classList.remove('active-pause');
             }
           }
+        });
+      }
+
+      // 4. Day / Night Environment & Ambience Audio Controls
+      const btnDayNight = document.getElementById('btn-env-daynight');
+      const envIcon = document.getElementById('env-icon');
+      const envText = document.getElementById('env-text');
+      if (btnDayNight && sceneManager) {
+        const envCtrl = sceneManager.getEnvironmentController();
+        btnDayNight.addEventListener('click', () => {
+          const isNight = envCtrl.toggleDayNight();
+          if (envIcon) envIcon.textContent = isNight ? '🌙' : '☀️';
+          if (envText) envText.textContent = isNight ? 'Night' : 'Day';
+          btnDayNight.classList.toggle('active-night', isNight);
+        });
+      }
+
+      const btnAudio = document.getElementById('btn-audio-ambience');
+      const audioIcon = document.getElementById('audio-icon');
+      const audioText = document.getElementById('audio-text');
+      if (btnAudio && sceneManager) {
+        const audio = sceneManager.getAmbienceAudio();
+        btnAudio.addEventListener('click', () => {
+          const isMuted = audio.toggleMute();
+          if (audioIcon) audioIcon.textContent = isMuted ? '🔇' : '🔊';
+          if (audioText) audioText.textContent = isMuted ? 'Muted' : 'Ambience';
+          btnAudio.classList.toggle('active-audio', !isMuted);
         });
       }
 
@@ -130,7 +158,7 @@ function initApp(): void {
 
       if (btnSpawnPolice) {
         btnSpawnPolice.addEventListener('click', () => {
-          env.spawnEmergencyVehicle('police', undefined, false);
+          env.spawnEmergencyVehicle('police', undefined, true);
         });
       }
 

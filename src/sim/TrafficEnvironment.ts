@@ -11,7 +11,9 @@ import {
   EmergencyStatusInfo,
   SpeedViolationRecord,
   SpeedCameraDefinition,
-  SignalPhase
+  SignalPhase,
+  DiscreteTrafficState,
+  QueueDensity
 } from '../types';
 
 export interface TrafficEnvironmentConfig {
@@ -45,6 +47,11 @@ export class TrafficEnvironment {
 
   // Track positions prior to kinematics update for camera detection lines
   private prevPositions: Map<string, number> = new Map();
+
+  // Persistent allocation caches for hot simulation paths
+  private cachedSignalStates: Map<Direction, LightState> = new Map();
+  private laneVehicleMap: Map<string, Vehicle[]> = new Map();
+  private remainingVehiclesBuffer: Vehicle[] = [];
 
   // Simulation controls state
   private paused: boolean = false;
@@ -109,12 +116,11 @@ export class TrafficEnvironment {
   }
 
   public getSignalStates(): Map<Direction, LightState> {
-    const map = new Map<Direction, LightState>();
-    map.set(Direction.NORTH, this.signalController.getLightState(Direction.NORTH));
-    map.set(Direction.SOUTH, this.signalController.getLightState(Direction.SOUTH));
-    map.set(Direction.EAST, this.signalController.getLightState(Direction.EAST));
-    map.set(Direction.WEST, this.signalController.getLightState(Direction.WEST));
-    return map;
+    this.cachedSignalStates.set(Direction.NORTH, this.signalController.getLightState(Direction.NORTH));
+    this.cachedSignalStates.set(Direction.SOUTH, this.signalController.getLightState(Direction.SOUTH));
+    this.cachedSignalStates.set(Direction.EAST, this.signalController.getLightState(Direction.EAST));
+    this.cachedSignalStates.set(Direction.WEST, this.signalController.getLightState(Direction.WEST));
+    return this.cachedSignalStates;
   }
 
   public getSpeedCameras(): SpeedCameraDefinition[] {
@@ -249,21 +255,22 @@ export class TrafficEnvironment {
       this.prevPositions.set(v.id, v.s);
     }
 
-    // 4. Group vehicles by lane and sort them by longitudinal distance s descending (furthest first)
-    const laneMap = new Map<string, Vehicle[]>();
+    // 4. Group vehicles by lane using persistent map to avoid per-tick heap allocations
+    this.laneVehicleMap.forEach(arr => { arr.length = 0; });
     for (const v of this.vehicles) {
-      let list = laneMap.get(v.laneId);
+      let list = this.laneVehicleMap.get(v.laneId);
       if (!list) {
         list = [];
-        laneMap.set(v.laneId, list);
+        this.laneVehicleMap.set(v.laneId, list);
       }
       list.push(v);
     }
 
     // 5. Update kinematics for each lane
-    const remainingVehicles: Vehicle[] = [];
+    this.remainingVehiclesBuffer.length = 0;
 
-    laneMap.forEach((laneVehicles, laneId) => {
+    this.laneVehicleMap.forEach((laneVehicles, laneId) => {
+      if (laneVehicles.length === 0) return;
       laneVehicles.sort((a, b) => b.s - a.s);
 
       const lane = this.laneNetwork.getLane(laneId);
@@ -280,14 +287,14 @@ export class TrafficEnvironment {
 
         // Check if vehicle has reached the end of the road
         if (vehicle.s < lane.length) {
-          remainingVehicles.push(vehicle);
+          this.remainingVehiclesBuffer.push(vehicle);
         } else {
           this.totalPassed++;
         }
       }
     });
 
-    this.vehicles = remainingVehicles;
+    this.vehicles = [...this.remainingVehiclesBuffer];
 
     // 6. Check speed cameras for violations
     this.speedEnforcement.checkSpeedViolations(
@@ -327,6 +334,112 @@ export class TrafficEnvironment {
     };
   }
 
+  // =========================================================================
+  // RL BACKEND READINESS INTERFACES
+  // =========================================================================
+
+  /**
+   * Returns queued vehicle counts (v < 0.5 m/s) broken down by approach direction.
+   */
+  public getQueueLengthsByDirection(): Record<Direction, number> {
+    const counts: Record<Direction, number> = {
+      [Direction.NORTH]: 0,
+      [Direction.SOUTH]: 0,
+      [Direction.EAST]: 0,
+      [Direction.WEST]: 0
+    };
+
+    for (const v of this.vehicles) {
+      if (v.v < 0.5) {
+        const lane = this.laneNetwork.getLane(v.laneId);
+        if (lane) {
+          counts[lane.direction]++;
+        }
+      }
+    }
+
+    return counts;
+  }
+
+  /**
+   * Returns total vehicle waiting times (seconds) accumulated per approach direction.
+   */
+  public getWaitingTimesByDirection(): Record<Direction, number> {
+    const times: Record<Direction, number> = {
+      [Direction.NORTH]: 0,
+      [Direction.SOUTH]: 0,
+      [Direction.EAST]: 0,
+      [Direction.WEST]: 0
+    };
+
+    for (const v of this.vehicles) {
+      const lane = this.laneNetwork.getLane(v.laneId);
+      if (lane) {
+        times[lane.direction] += v.waitingTimeSec;
+      }
+    }
+
+    return times;
+  }
+
+  /**
+   * Returns compact discrete state representation for Q-learning:
+   * [nsDensity, ewDensity, activePhase].
+   */
+  public getDiscreteTrafficState(): DiscreteTrafficState {
+    const queues = this.getQueueLengthsByDirection();
+    const nsTotal = queues[Direction.NORTH] + queues[Direction.SOUTH];
+    const ewTotal = queues[Direction.EAST] + queues[Direction.WEST];
+
+    const toDensity = (count: number): QueueDensity => {
+      if (count <= 2) return QueueDensity.LOW;
+      if (count <= 5) return QueueDensity.MEDIUM;
+      return QueueDensity.HIGH;
+    };
+
+    const phase = this.signalController.getPhase();
+    const activePhase = (
+      phase === SignalPhase.EAST_WEST_GREEN ||
+      phase === SignalPhase.EAST_WEST_YELLOW ||
+      phase === SignalPhase.ALL_RED_EW_TO_NS
+    )
+      ? SignalPhase.EAST_WEST_GREEN
+      : SignalPhase.NORTH_SOUTH_GREEN;
+
+    return {
+      nsDensity: toDensity(nsTotal),
+      ewDensity: toDensity(ewTotal),
+      activePhase
+    };
+  }
+
+  /**
+   * Applies an RL action (0 = North-South green, 1 = East-West green) through the safe signal controller.
+   */
+  public applyAction(action: 0 | 1 | SignalPhase.NORTH_SOUTH_GREEN | SignalPhase.EAST_WEST_GREEN): boolean {
+    const isNorthSouth = action === 0 || (action as unknown) === SignalPhase.NORTH_SOUTH_GREEN;
+    const targetPhase = isNorthSouth ? SignalPhase.NORTH_SOUTH_GREEN : SignalPhase.EAST_WEST_GREEN;
+
+    return this.signalController.requestPhase(targetPhase);
+  }
+
+  /**
+   * Calculates standard reinforcement learning reward signal:
+   * Negative penalty for total waiting time and queue backlog.
+   */
+  public calculateDefaultReward(): number {
+    let totalWait = 0;
+    let queueCount = 0;
+
+    for (const v of this.vehicles) {
+      totalWait += v.waitingTimeSec;
+      if (v.v < 0.5) queueCount++;
+    }
+
+    const penalty = 0.1 * totalWait + 1.0 * queueCount;
+    return penalty === 0 ? 0 : -penalty;
+  }
+
   /**
    * Resets simulation to initial state.
    */
@@ -337,6 +450,8 @@ export class TrafficEnvironment {
     this.elapsedSimSeconds = 0;
     this.accumulator = 0;
     this.prevPositions.clear();
+    this.laneVehicleMap.forEach(arr => { arr.length = 0; });
+    this.remainingVehiclesBuffer.length = 0;
     this.signalController.reset();
     this.spawner.reset(seed);
     this.speedEnforcement.reset();

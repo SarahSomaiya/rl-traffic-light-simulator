@@ -176,6 +176,29 @@ html, body {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+/* Environment & Ambience Toolbar */
+.env-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0.25rem 0.4rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.btn-tool.active-night {
+  background: rgba(99, 102, 241, 0.22);
+  border-color: rgba(129, 140, 248, 0.5);
+  color: #c7d2fe;
+}
+
+.btn-tool.active-audio {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.45);
+  color: #6ee7b7;
+}
+
 .toolbar-label {
   font-family: var(--font-mono);
   font-size: 0.7rem;

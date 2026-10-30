@@ -9,7 +9,7 @@ export interface PresetConfig {
 
 export const CAMERA_PRESETS: Record<CameraPreset, PresetConfig> = {
   isometric: {
-    position: new THREE.Vector3(52, 64, 62),
+    position: new THREE.Vector3(56, 68, 64),
     target: new THREE.Vector3(0, 0, 0)
   },
   overhead: {
