@@ -3,6 +3,9 @@ import { Vehicle } from './Vehicle';
 import { SignalController } from './SignalController';
 import { Spawner } from './Spawner';
 import { SpeedEnforcementManager } from './SpeedEnforcement';
+import { DQNAgent } from '../rl/DQNAgent';
+import { RLController } from '../rl/RLController';
+import { TrainingManager } from '../rl/TrainingManager';
 import {
   SimulationMetrics,
   Direction,
@@ -29,9 +32,9 @@ export const DEFAULT_ENV_CONFIG: TrafficEnvironmentConfig = {
 };
 
 /**
- * Headless Traffic Simulation Environment (Phase 3.5).
+ * Headless Traffic Simulation Environment.
  * Coordinates deterministic kinematics, vehicle fleet diversity, emergency vehicle status,
- * speed limit enforcement, and safe signal transitions.
+ * speed limit enforcement, and Deep Q-Network (DQN) integration.
  */
 export class TrafficEnvironment {
   private config: TrafficEnvironmentConfig;
@@ -39,6 +42,11 @@ export class TrafficEnvironment {
   private signalController: SignalController;
   private spawner: Spawner;
   private speedEnforcement: SpeedEnforcementManager;
+
+  // Reinforcement Learning: Deep Q-Network components
+  private dqnAgent: DQNAgent;
+  private rlController: RLController;
+  private trainingManager: TrainingManager;
 
   private vehicles: Vehicle[] = [];
   private totalSpawned: number = 0;
@@ -64,10 +72,30 @@ export class TrafficEnvironment {
     this.signalController = new SignalController();
     this.spawner = new Spawner(this.laneNetwork, {}, seed);
     this.speedEnforcement = new SpeedEnforcementManager();
+
+    this.dqnAgent = new DQNAgent({}, seed);
+    this.rlController = new RLController(this, this.dqnAgent);
+    this.trainingManager = new TrainingManager(this, this.dqnAgent, this.rlController);
   }
 
   public getLaneNetwork(): LaneNetwork {
     return this.laneNetwork;
+  }
+
+  public getDQNAgent(): DQNAgent {
+    return this.dqnAgent;
+  }
+
+  public getRLAgent(): DQNAgent {
+    return this.dqnAgent;
+  }
+
+  public getRLController(): RLController {
+    return this.rlController;
+  }
+
+  public getTrainingManager(): TrainingManager {
+    return this.trainingManager;
   }
 
   public getSignalController(): SignalController {
@@ -302,6 +330,13 @@ export class TrafficEnvironment {
       this.prevPositions,
       this.elapsedSimSeconds
     );
+
+    // 7. Advance RL controller or training manager
+    if (this.trainingManager.getState() === 'TRAINING') {
+      this.trainingManager.step(dt);
+    } else {
+      this.rlController.update(dt);
+    }
   }
 
   /**
@@ -442,6 +477,7 @@ export class TrafficEnvironment {
 
   /**
    * Resets simulation to initial state.
+   * Note: Preserves learned Q-values in Q-table across episode resets.
    */
   public reset(seed: number = 42): void {
     this.vehicles = [];
@@ -455,5 +491,22 @@ export class TrafficEnvironment {
     this.signalController.reset();
     this.spawner.reset(seed);
     this.speedEnforcement.reset();
+    this.rlController.resetIntervalTracking();
+  }
+
+  /**
+   * Explicitly resets the learned DQN neural network and replay buffer independently from simulation resets.
+   */
+  public resetModel(): void {
+    this.dqnAgent.resetWeights();
+    this.dqnAgent.resetEpsilon();
+    this.rlController.getReplayBuffer().clear();
+  }
+
+  /**
+   * Backward-compatible alias for resetModel.
+   */
+  public resetQTable(): void {
+    this.resetModel();
   }
 }

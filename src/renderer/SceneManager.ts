@@ -349,6 +349,14 @@ export class SceneManager {
     this.ambienceAudio.reset();
   }
 
+  public resetModel(): void {
+    this.trafficEnvironment.resetModel();
+  }
+
+  public resetQTable(): void {
+    this.trafficEnvironment.resetModel();
+  }
+
   /**
    * Cleans up scene resources, geometries, materials, event listeners, and renderer.
    */

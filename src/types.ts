@@ -119,3 +119,113 @@ export interface FleetDistributionMetrics {
   ambulance: number;
   van: number;
 }
+
+/**
+ * Phase 4 & 5: Reinforcement Learning & Deep Q-Network (DQN) Types
+ */
+export enum RLAction {
+  HOLD_PHASE = 0,
+  REQUEST_SWITCH = 1
+}
+
+export type GreenDirection = 'NS' | 'EW';
+
+export type QueueCategory = 0 | 1 | 2 | 3;
+
+export enum EmergencyPriorityCategory {
+  NONE = 0,
+  NS_PRIORITY = 1,
+  EW_PRIORITY = 2
+}
+
+/**
+ * Rich numerical observation for Deep Q-Network.
+ * 15 continuous and one-hot normalized features in [0, 1].
+ */
+export interface TrafficObservation {
+  // Raw simulation metrics for debugging and HUD displays
+  raw: {
+    greenDirection: GreenDirection;
+    nsQueueLength: number;
+    ewQueueLength: number;
+    nsAvgWaitSec: number;
+    ewAvgWaitSec: number;
+    nsAvgSpeedMs: number;
+    ewAvgSpeedMs: number;
+    nsApproachingCount: number;
+    ewApproachingCount: number;
+    emergencyActive: boolean;
+    emergencyDirection: Direction | null;
+    emergencyDistanceMeters: number;
+    greenPhaseElapsedSec: number;
+  };
+  // Normalized feature vector matching neural network input shape (length 15)
+  vector: number[];
+}
+
+export interface ReplayTransition {
+  state: number[];
+  action: RLAction;
+  reward: number;
+  nextState: number[];
+  done: boolean;
+}
+
+export interface DQNHyperparameters {
+  learningRate: number;        // default 0.001
+  gamma: number;               // discount factor (default 0.95)
+  epsilon: number;             // starting exploration rate (default 1.0)
+  minEpsilon: number;          // minimum exploration rate (default 0.05)
+  epsilonDecay: number;        // decay factor per episode (default 0.98)
+  decisionIntervalSec: number; // seconds between RL decisions (default 5.0)
+  batchSize: number;           // mini-batch size (default 32)
+  replayCapacity: number;      // replay buffer capacity (default 10000)
+  minReplaySize: number;       // min experiences before training starts (default 64)
+  targetSyncInterval: number;  // training steps between target network syncs (default 10)
+  hiddenUnits: number[];       // dense layer sizes, default [64, 64]
+}
+
+/**
+ * Legacy discrete state representation retained for baseline compatibility.
+ */
+export interface EncodedTrafficState {
+  greenDirection: GreenDirection;
+  nsQueueCategory: QueueCategory;
+  ewQueueCategory: QueueCategory;
+  emergencyCategory: EmergencyPriorityCategory;
+  stateIndex: number; // Discrete index in [0, 95]
+  stateKey: string;   // Human-readable key e.g. "G:NS|Qns:1|Qew:2|Em:NONE"
+}
+
+export interface QLearningHyperparameters {
+  alpha: number;
+  gamma: number;
+  epsilon: number;
+  minEpsilon: number;
+  epsilonDecay: number;
+  decisionIntervalSec: number;
+}
+
+export type RLControllerMode = 'AUTOMATIC' | 'RL_AGENT' | 'TRAINING' | 'EVALUATION';
+
+export interface EpisodeMetrics {
+  episode: number;
+  totalReward: number;
+  movingAverageReward?: number;
+  averageWaitSec: number;
+  vehiclesCleared: number;
+  meanQueue: number;
+  durationSec: number;
+  epsilonAtEnd?: number;
+  replayBufferSize?: number;
+  averageLoss?: number;
+  trainingUpdatesCount?: number;
+}
+
+export interface EvaluationComparisonResult {
+  baseline: EpisodeMetrics;
+  rl: EpisodeMetrics;
+  waitingTimeChangePercent: number;
+  throughputChangePercent: number;
+  episodesRun: number;
+}
