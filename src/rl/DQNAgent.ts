@@ -11,7 +11,7 @@ export const DEFAULT_DQN_HYPERPARAMETERS: DQNHyperparameters = {
   decisionIntervalSec: 5.0,
   batchSize: 32,
   replayCapacity: 10000,
-  minReplaySize: 64,
+  minReplaySize: 32,
   targetSyncInterval: 10,
   hiddenUnits: [64, 64]
 };

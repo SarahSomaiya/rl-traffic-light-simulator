@@ -4,11 +4,12 @@ import {
   SignalPhase,
   TrafficObservation
 } from '../types';
-import { TrafficEnvironment } from '../sim/TrafficEnvironment';
+import type { TrafficEnvironment } from '../sim/TrafficEnvironment';
 import { TrafficStateEncoder } from './TrafficStateEncoder';
 import { DQNAgent } from './DQNAgent';
 import { ReplayBuffer } from './ReplayBuffer';
 import { RewardCalculator, IntervalTrafficObservations } from './RewardCalculator';
+import type { SwitchReason } from '../sim/SignalController';
 
 export interface RLDecisionTelemetry {
   observation: TrafficObservation | null;
@@ -23,6 +24,10 @@ export interface RLDecisionTelemetry {
   replayBufferSize: number;
   epsilon: number;
   mode: RLControllerMode;
+  holdActionCount?: number;
+  switchActionCount?: number;
+  lastSwitchReason?: SwitchReason;
+  maxGreenInterventions?: number;
 }
 
 /**
@@ -42,6 +47,11 @@ export class RLController {
 
   // Interval observation tracking
   private queueSamples: number[] = [];
+  private nsQueueSamples: number[] = [];
+  private ewQueueSamples: number[] = [];
+  private lastTotalPassed: number = 0;
+  private holdActionCount: number = 0;
+  private switchActionCount: number = 0;
   private incrementalWaitAccumulator: number = 0;
   private emergencyWaitAccumulator: number = 0;
   private emergencyClearedAccumulator: number = 0;
@@ -57,6 +67,7 @@ export class RLController {
 
   // Guard against concurrent overlapping training calls
   private isTrainingStepActive: boolean = false;
+  private currentTrainingPromise: Promise<number> | null = null;
 
   constructor(
     env: TrafficEnvironment,
@@ -94,6 +105,10 @@ export class RLController {
       signal.setAutoCycle(false);
       this.dqnAgent.setEvaluationMode(false);
     }
+  }
+
+  public getPendingTrainingPromise(): Promise<number> | null {
+    return this.currentTrainingPromise;
   }
 
   public getAgent(): DQNAgent {
@@ -149,6 +164,8 @@ export class RLController {
       this.env
     );
     this.queueSamples.push(nsQueueCount + ewQueueCount);
+    this.nsQueueSamples.push(nsQueueCount);
+    this.ewQueueSamples.push(ewQueueCount);
 
     // Accumulate incremental wait time during this tick
     for (const v of vehicles) {
@@ -180,12 +197,21 @@ export class RLController {
           ? this.queueSamples.reduce((a, b) => a + b, 0) / this.queueSamples.length
           : 0;
 
+      const meanNS = this.nsQueueSamples.length > 0 ? this.nsQueueSamples.reduce((a, b) => a + b, 0) / this.nsQueueSamples.length : 0;
+      const meanEW = this.ewQueueSamples.length > 0 ? this.ewQueueSamples.reduce((a, b) => a + b, 0) / this.ewQueueSamples.length : 0;
+      const queueImbalance = Math.abs(meanNS - meanEW);
+      const currentPassed = this.env.getMetrics().totalVehiclesPassed;
+      const vehiclesCleared = Math.max(0, currentPassed - this.lastTotalPassed);
+      this.lastTotalPassed = currentPassed;
+
       const obs: IntervalTrafficObservations = {
         meanQueueCount: meanQueue,
         incrementalWaitSeconds: this.incrementalWaitAccumulator,
         actionSwitchedPhase: this.actionSwitchedPhaseInInterval,
         emergencyWaitingSeconds: this.emergencyWaitAccumulator,
-        emergencyVehiclesCleared: this.emergencyClearedAccumulator
+        emergencyVehiclesCleared: this.emergencyClearedAccumulator,
+        queueImbalance,
+        vehiclesCleared
       };
 
       const breakdown = this.rewardCalculator.calculate(obs);
@@ -208,14 +234,17 @@ export class RLController {
       ) {
         this.isTrainingStepActive = true;
         const batch = this.replayBuffer.sample(this.dqnAgent.getHyperparameters().batchSize);
-        this.dqnAgent.trainOnBatch(batch).finally(() => {
+        this.currentTrainingPromise = this.dqnAgent.trainOnBatch(batch).finally(() => {
           this.isTrainingStepActive = false;
+          this.currentTrainingPromise = null;
         });
       }
     }
 
     // Reset interval accumulators
     this.queueSamples = [];
+    this.nsQueueSamples = [];
+    this.ewQueueSamples = [];
     this.incrementalWaitAccumulator = 0;
     this.emergencyWaitAccumulator = 0;
     this.emergencyClearedAccumulator = 0;
@@ -226,6 +255,11 @@ export class RLController {
     this.lastIsExploration = isExploration;
     this.lastQValues = qValues;
     this.totalDecisionsCount++;
+    if (action === RLAction.HOLD_PHASE) {
+      this.holdActionCount++;
+    } else {
+      this.switchActionCount++;
+    }
 
     // 4. Submit action to signal state machine
     if (action === RLAction.REQUEST_SWITCH) {
@@ -237,7 +271,7 @@ export class RLController {
           ? SignalPhase.EAST_WEST_GREEN
           : SignalPhase.NORTH_SOUTH_GREEN;
 
-      const switchInitiated = signal.requestPhase(targetPhase);
+      const switchInitiated = signal.requestPhase(targetPhase, 'DQN_REQUEST');
       if (switchInitiated) {
         this.actionSwitchedPhaseInInterval = true;
       }
@@ -296,16 +330,32 @@ export class RLController {
       recentLoss: this.dqnAgent.getRecentLoss(),
       replayBufferSize: this.replayBuffer.size(),
       epsilon: this.dqnAgent.getHyperparameters().epsilon,
-      mode: this.mode
+      mode: this.mode,
+      holdActionCount: this.holdActionCount,
+      switchActionCount: this.switchActionCount,
+      lastSwitchReason: this.env.getSignalController().getLastSwitchReason(),
+      maxGreenInterventions: this.env.getSignalController().getMaxGreenInterventionsCount()
     };
   }
 
   /**
    * Resets internal interval accumulators and transition trackers (used on episode reset).
    */
+  public resetActionCounts(): void {
+    this.holdActionCount = 0;
+    this.switchActionCount = 0;
+  }
+
+  public getActionCounts(): { hold: number; switch: number } {
+    return { hold: this.holdActionCount, switch: this.switchActionCount };
+  }
+
   public resetIntervalTracking(): void {
     this.decisionTimer = 0;
     this.queueSamples = [];
+    this.nsQueueSamples = [];
+    this.ewQueueSamples = [];
+    this.lastTotalPassed = this.env.getMetrics().totalVehiclesPassed;
     this.incrementalWaitAccumulator = 0;
     this.emergencyWaitAccumulator = 0;
     this.emergencyClearedAccumulator = 0;

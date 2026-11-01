@@ -7,8 +7,8 @@ import {
   SignalPhase,
   TrafficObservation
 } from '../types';
-import { TrafficEnvironment } from '../sim/TrafficEnvironment';
-import { Vehicle } from '../sim/Vehicle';
+import type { TrafficEnvironment } from '../sim/TrafficEnvironment';
+import type { Vehicle } from '../sim/Vehicle';
 
 export const TOTAL_RL_STATES = 96; // 2 * 4 * 4 * 3 (legacy discrete state space)
 export const DQN_OBSERVATION_DIM = 15; // 15-dimensional continuous normalized observation vector

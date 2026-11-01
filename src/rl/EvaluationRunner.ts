@@ -1,5 +1,5 @@
-import { EpisodeMetrics, EvaluationComparisonResult } from '../types';
-import { TrafficEnvironment } from '../sim/TrafficEnvironment';
+import { Direction, EpisodeMetrics, EvaluationComparisonResult } from '../types';
+import type { TrafficEnvironment } from '../sim/TrafficEnvironment';
 import { DQNAgent } from './DQNAgent';
 import { RLController } from './RLController';
 import { RewardCalculator, IntervalTrafficObservations } from './RewardCalculator';
@@ -36,6 +36,8 @@ export class EvaluationRunner {
     this.env.reset(seed);
     this.controller.setMode('AUTOMATIC');
     this.controller.resetIntervalTracking();
+    this.controller.resetActionCounts();
+    this.env.getSignalController().resetMaxGreenInterventions();
 
     const dt = 0.05;
     const totalTicks = Math.floor(durationSec / dt);
@@ -43,9 +45,12 @@ export class EvaluationRunner {
 
     let cumulativeReward = 0;
     let queueSamples: number[] = [];
+    let nsQueueSamples: number[] = [];
+    let ewQueueSamples: number[] = [];
     let incrementalWait = 0;
     let emergencyWait = 0;
     let previousPhase = this.env.getSignalController().getPhase();
+    let lastTotalPassed = this.env.getMetrics().totalVehiclesPassed;
 
     for (let t = 0; t < totalTicks; t++) {
       this.env.tick(dt);
@@ -54,6 +59,8 @@ export class EvaluationRunner {
       const vehicles = this.env.getVehicles();
       const { nsQueueCount, ewQueueCount } = TrafficStateEncoder.calculateQueues(vehicles, this.env);
       queueSamples.push(nsQueueCount + ewQueueCount);
+      nsQueueSamples.push(nsQueueCount);
+      ewQueueSamples.push(ewQueueCount);
 
       for (const v of vehicles) {
         if (v.v < 0.5) {
@@ -69,6 +76,16 @@ export class EvaluationRunner {
         const meanQ = queueSamples.length > 0
           ? queueSamples.reduce((a, b) => a + b, 0) / queueSamples.length
           : 0;
+        const meanNS = nsQueueSamples.length > 0
+          ? nsQueueSamples.reduce((a, b) => a + b, 0) / nsQueueSamples.length
+          : 0;
+        const meanEW = ewQueueSamples.length > 0
+          ? ewQueueSamples.reduce((a, b) => a + b, 0) / ewQueueSamples.length
+          : 0;
+
+        const currentPassed = this.env.getMetrics().totalVehiclesPassed;
+        const vehiclesCleared = Math.max(0, currentPassed - lastTotalPassed);
+        lastTotalPassed = currentPassed;
 
         const currentPhase = this.env.getSignalController().getPhase();
         const switched = currentPhase !== previousPhase;
@@ -78,13 +95,17 @@ export class EvaluationRunner {
           incrementalWaitSeconds: incrementalWait,
           actionSwitchedPhase: switched,
           emergencyWaitingSeconds: emergencyWait,
-          emergencyVehiclesCleared: 0
+          emergencyVehiclesCleared: 0,
+          queueImbalance: Math.abs(meanNS - meanEW),
+          vehiclesCleared
         };
 
         const breakdown = this.rewardCalculator.calculate(obs);
         cumulativeReward += breakdown.totalReward;
 
         queueSamples = [];
+        nsQueueSamples = [];
+        ewQueueSamples = [];
         incrementalWait = 0;
         emergencyWait = 0;
         previousPhase = currentPhase;
@@ -92,14 +113,44 @@ export class EvaluationRunner {
     }
 
     const simMetrics = this.env.getMetrics();
+    const waitTimes = this.env.getWaitingTimesByDirection();
+    const nsWait = waitTimes[Direction.NORTH] + waitTimes[Direction.SOUTH];
+    const ewWait = waitTimes[Direction.EAST] + waitTimes[Direction.WEST];
+    const activeVehicles = this.env.getVehicles();
+    let nsActive = 0;
+    let ewActive = 0;
+    for (const v of activeVehicles) {
+      const lane = this.env.getLaneNetwork().getLane(v.laneId);
+      if (lane) {
+        if (lane.direction === Direction.NORTH || lane.direction === Direction.SOUTH) nsActive++;
+        else ewActive++;
+      }
+    }
+
+    const nsAvgWait = nsActive > 0 ? nsWait / nsActive : 0;
+    const ewAvgWait = ewActive > 0 ? ewWait / ewActive : 0;
+
+    const meanNSQueue = nsQueueSamples.length > 0
+      ? nsQueueSamples.reduce((a, b) => a + b, 0) / nsQueueSamples.length
+      : 0;
+    const meanEWQueue = ewQueueSamples.length > 0
+      ? ewQueueSamples.reduce((a, b) => a + b, 0) / ewQueueSamples.length
+      : 0;
 
     return {
       episode: 0,
       totalReward: parseFloat(cumulativeReward.toFixed(2)),
       averageWaitSec: parseFloat(simMetrics.averageWaitTimeSec.toFixed(2)),
+      nsAverageWaitSec: parseFloat(nsAvgWait.toFixed(2)),
+      ewAverageWaitSec: parseFloat(ewAvgWait.toFixed(2)),
       vehiclesCleared: simMetrics.totalVehiclesPassed,
       meanQueue: simMetrics.currentQueueLength,
-      durationSec
+      nsMeanQueue: parseFloat(meanNSQueue.toFixed(1)),
+      ewMeanQueue: parseFloat(meanEWQueue.toFixed(1)),
+      durationSec,
+      holdCount: 0,
+      switchCount: 0,
+      maxGreenInterventions: this.env.getSignalController().getMaxGreenInterventionsCount()
     };
   }
 
@@ -111,16 +162,25 @@ export class EvaluationRunner {
     this.env.reset(seed);
     this.controller.setMode('EVALUATION');
     this.controller.resetIntervalTracking();
+    this.controller.resetActionCounts();
+    this.env.getSignalController().resetMaxGreenInterventions();
 
     const dt = 0.05;
     const totalTicks = Math.floor(durationSec / dt);
     let cumulativeReward = 0;
 
+    let nsQueueSamples: number[] = [];
+    let ewQueueSamples: number[] = [];
+
     for (let t = 0; t < totalTicks; t++) {
       const prevTele = this.controller.getTelemetry();
-      // Tick advances simulation and calls controller.update(dt) exactly ONCE
       this.env.tick(dt);
       const currTele = this.controller.getTelemetry();
+
+      const vehicles = this.env.getVehicles();
+      const { nsQueueCount, ewQueueCount } = TrafficStateEncoder.calculateQueues(vehicles, this.env);
+      nsQueueSamples.push(nsQueueCount);
+      ewQueueSamples.push(ewQueueCount);
 
       if (currTele.totalDecisionsCount > prevTele.totalDecisionsCount) {
         cumulativeReward += currTele.reward;
@@ -128,14 +188,46 @@ export class EvaluationRunner {
     }
 
     const simMetrics = this.env.getMetrics();
+    const waitTimes = this.env.getWaitingTimesByDirection();
+    const nsWait = waitTimes[Direction.NORTH] + waitTimes[Direction.SOUTH];
+    const ewWait = waitTimes[Direction.EAST] + waitTimes[Direction.WEST];
+    const activeVehicles = this.env.getVehicles();
+    let nsActive = 0;
+    let ewActive = 0;
+    for (const v of activeVehicles) {
+      const lane = this.env.getLaneNetwork().getLane(v.laneId);
+      if (lane) {
+        if (lane.direction === Direction.NORTH || lane.direction === Direction.SOUTH) nsActive++;
+        else ewActive++;
+      }
+    }
+
+    const nsAvgWait = nsActive > 0 ? nsWait / nsActive : 0;
+    const ewAvgWait = ewActive > 0 ? ewWait / ewActive : 0;
+
+    const meanNSQueue = nsQueueSamples.length > 0
+      ? nsQueueSamples.reduce((a, b) => a + b, 0) / nsQueueSamples.length
+      : 0;
+    const meanEWQueue = ewQueueSamples.length > 0
+      ? ewQueueSamples.reduce((a, b) => a + b, 0) / ewQueueSamples.length
+      : 0;
+
+    const finalTele = this.controller.getTelemetry();
 
     return {
       episode: 1,
       totalReward: parseFloat(cumulativeReward.toFixed(2)),
       averageWaitSec: parseFloat(simMetrics.averageWaitTimeSec.toFixed(2)),
+      nsAverageWaitSec: parseFloat(nsAvgWait.toFixed(2)),
+      ewAverageWaitSec: parseFloat(ewAvgWait.toFixed(2)),
       vehiclesCleared: simMetrics.totalVehiclesPassed,
       meanQueue: simMetrics.currentQueueLength,
-      durationSec
+      nsMeanQueue: parseFloat(meanNSQueue.toFixed(1)),
+      ewMeanQueue: parseFloat(meanEWQueue.toFixed(1)),
+      durationSec,
+      holdCount: finalTele.holdActionCount,
+      switchCount: finalTele.switchActionCount,
+      maxGreenInterventions: this.env.getSignalController().getMaxGreenInterventionsCount()
     };
   }
 

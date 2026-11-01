@@ -77,4 +77,60 @@ describe('RewardCalculator', () => {
     expect(resCleared.emergencyModifier).toBe(5.0);
     expect(resCleared.totalReward).toBe(5.0);
   });
+
+  it('4. should apply queue imbalance penalty when one approach is starved', () => {
+    const calc = new RewardCalculator({
+      queueWeight: 0.5,
+      waitingTimeWeight: 0.05,
+      imbalanceWeight: 0.35
+    });
+
+    // Balanced case: queueImbalance = 0
+    const balanced = calc.calculate({
+      meanQueueCount: 10,
+      incrementalWaitSeconds: 20,
+      actionSwitchedPhase: false,
+      emergencyWaitingSeconds: 0,
+      emergencyVehiclesCleared: 0,
+      queueImbalance: 0
+    });
+    // -(0.5 * 10) - (0.05 * 20) = -5.0 - 1.0 = -6.0
+    expect(balanced.totalReward).toBe(-6.0);
+    expect(balanced.imbalanceCost).toBe(0);
+
+    // Starved case: queueImbalance = 10 (|10 - 0|)
+    const starved = calc.calculate({
+      meanQueueCount: 10,
+      incrementalWaitSeconds: 20,
+      actionSwitchedPhase: false,
+      emergencyWaitingSeconds: 0,
+      emergencyVehiclesCleared: 0,
+      queueImbalance: 10
+    });
+    // -6.0 - (0.35 * 10) = -6.0 - 3.5 = -9.5
+    expect(starved.totalReward).toBe(-9.5);
+    expect(starved.imbalanceCost).toBe(3.5);
+  });
+
+  it('5. should award throughput bonus for vehicles clearing intersection', () => {
+    const calc = new RewardCalculator({
+      queueWeight: 0.5,
+      waitingTimeWeight: 0.05,
+      throughputReward: 1.0
+    });
+
+    const res = calc.calculate({
+      meanQueueCount: 4,
+      incrementalWaitSeconds: 10,
+      actionSwitchedPhase: false,
+      emergencyWaitingSeconds: 0,
+      emergencyVehiclesCleared: 0,
+      queueImbalance: 0,
+      vehiclesCleared: 5 // 5 vehicles completed traversal
+    });
+
+    // -(0.5 * 4) - (0.05 * 10) + (1.0 * 5) = -2.0 - 0.5 + 5.0 = +2.5
+    expect(res.throughputBonus).toBe(5.0);
+    expect(res.totalReward).toBe(2.5);
+  });
 });

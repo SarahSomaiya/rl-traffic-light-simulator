@@ -1,5 +1,5 @@
 import { EpisodeMetrics } from '../types';
-import { TrafficEnvironment } from '../sim/TrafficEnvironment';
+import type { TrafficEnvironment } from '../sim/TrafficEnvironment';
 import { DQNAgent } from './DQNAgent';
 import { RLController } from './RLController';
 
@@ -218,6 +218,25 @@ export class TrainingManager {
   /**
    * Resets the learned model weights and optimizer without altering environment state.
    */
+  /**
+   * Runs training headlessly and asynchronously, properly awaiting TensorFlow.js
+   * backpropagation and weight updates between simulation ticks.
+   */
+  public async trainHeadlessAsync(episodes: number, episodeDurationSec: number = 60.0): Promise<EpisodeMetrics[]> {
+    this.config.episodeDurationSec = episodeDurationSec;
+    this.startTraining(episodes);
+
+    const dt = 0.05;
+    while (this.state === 'TRAINING') {
+      this.env.tick(dt);
+      const pending = this.controller.getPendingTrainingPromise();
+      if (pending) {
+        await pending;
+      }
+    }
+
+    return this.getEpisodeHistory();
+  }
   public resetModel(): void {
     this.agent.resetWeights();
     this.agent.resetEpsilon();

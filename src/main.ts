@@ -7,6 +7,10 @@ let telemetryIntervalId: number | null = null;
 
 // Initialize 3D scene and wire simulation controls when DOM is ready
 function initApp(): void {
+  if (sceneManager) {
+    console.warn('[RL Traffic Light Simulator] App already initialized; skipping duplicate setup.');
+    return;
+  }
   const container = document.getElementById('canvas-container');
   if (container) {
     try {
@@ -127,13 +131,13 @@ function initApp(): void {
 
       if (btnNsGreen) {
         btnNsGreen.addEventListener('click', () => {
-          signalCtrl.requestPhase(SignalPhase.NORTH_SOUTH_GREEN);
+          signalCtrl.requestPhase(SignalPhase.NORTH_SOUTH_GREEN, 'MANUAL_REQUEST');
         });
       }
 
       if (btnEwGreen) {
         btnEwGreen.addEventListener('click', () => {
-          signalCtrl.requestPhase(SignalPhase.EAST_WEST_GREEN);
+          signalCtrl.requestPhase(SignalPhase.EAST_WEST_GREEN, 'MANUAL_REQUEST');
         });
       }
 
@@ -512,7 +516,8 @@ function initApp(): void {
         if (rlStateStrEl) {
           if (rlTele.observation) {
             const raw = rlTele.observation.raw;
-            rlStateStrEl.textContent = `NS: ${raw.nsQueueLength} (w:${raw.nsAvgWaitSec}s) | EW: ${raw.ewQueueLength} (w:${raw.ewAvgWaitSec}s)`;
+            const elapsed = signalCtrl.getPhaseElapsed().toFixed(1);
+            rlStateStrEl.textContent = `NS: ${raw.nsQueueLength} | EW: ${raw.ewQueueLength} | ${raw.greenDirection} (${elapsed}s) [${rlTele.lastSwitchReason}]`;
           } else {
             rlStateStrEl.textContent = rlController.getMode() === 'AUTOMATIC' ? 'Fixed-Time (20s Auto)' : 'Waiting Decision...';
           }
@@ -522,7 +527,7 @@ function initApp(): void {
           if (rlTele.action !== null) {
             const actName = rlTele.action === 0 ? 'HOLD_PHASE' : 'REQUEST_SWITCH';
             const policyType = rlTele.isExploration ? '🎲 Exploration' : '🧠 Exploitation';
-            rlActionStrEl.textContent = `${actName} (${policyType})`;
+            rlActionStrEl.textContent = `${actName} (${policyType}) [H:${rlTele.holdActionCount} S:${rlTele.switchActionCount}]`;
           } else {
             rlActionStrEl.textContent = '—';
           }
@@ -542,7 +547,7 @@ function initApp(): void {
         }
 
         if (rlTrainProgressEl) {
-          rlTrainProgressEl.textContent = `Buf: ${rlTele.replayBufferSize} | Loss: ${rlTele.recentLoss.toFixed(4)} | ε: ${eps.toFixed(2)}`;
+          rlTrainProgressEl.textContent = `Buf: ${rlTele.replayBufferSize} | Loss: ${rlTele.recentLoss.toFixed(4)} | ε: ${eps.toFixed(2)} | MaxG: ${rlTele.maxGreenInterventions}`;
         }
 
         // Redraw training performance chart

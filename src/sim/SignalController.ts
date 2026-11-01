@@ -1,23 +1,34 @@
 import { Direction, LightState, SignalPhase } from '../types';
 
+export type SwitchReason =
+  | 'INITIAL'
+  | 'AUTO_CYCLE'
+  | 'DQN_REQUEST'
+  | 'MAX_GREEN_SAFEGUARD'
+  | 'EMERGENCY_PRIORITY'
+  | 'MANUAL_REQUEST';
+
 export interface SignalTimingConfig {
   defaultGreenDuration: number; // Duration of green in auto mode (seconds)
-  yellowDuration: number; // Clearance yellow (seconds)
-  allRedDuration: number; // Clearance all-red buffer (seconds)
-  minGreenDuration: number; // Safety guard: minimum green time before allowing switch
+  yellowDuration: number;       // Clearance yellow (seconds)
+  allRedDuration: number;       // Clearance all-red buffer (seconds)
+  minGreenDuration: number;     // Safety guard: minimum green time before allowing switch
+  maxGreenDuration: number;     // Safety guard: maximum green duration before forced switch
 }
 
 export const DEFAULT_SIGNAL_TIMING: SignalTimingConfig = {
   defaultGreenDuration: 20.0,
   yellowDuration: 3.0,
   allRedDuration: 1.5,
-  minGreenDuration: 4.0
+  minGreenDuration: 4.0,
+  maxGreenDuration: 25.0
 };
 
 /**
  * State machine managing safe traffic signal phases.
  * Guarantees conflict prevention (never simultaneous NS and EW greens),
- * enforces mandatory yellow clearance, all-red intervals, and minimum green duration.
+ * enforces mandatory yellow clearance, all-red intervals, minimum green duration,
+ * and maximum green safeguard to eliminate traffic starvation.
  */
 export class SignalController {
   private phase: SignalPhase = SignalPhase.NORTH_SOUTH_GREEN;
@@ -25,6 +36,11 @@ export class SignalController {
   private config: SignalTimingConfig;
   private autoCycle: boolean = true;
   private pendingPhaseRequest: SignalPhase | null = null;
+  private pendingRequestReason: SwitchReason = 'INITIAL';
+
+  // Safeguard & telemetry tracking
+  private lastSwitchReason: SwitchReason = 'INITIAL';
+  private maxGreenInterventions: number = 0;
 
   constructor(config: Partial<SignalTimingConfig> = {}) {
     this.config = { ...DEFAULT_SIGNAL_TIMING, ...config };
@@ -44,6 +60,26 @@ export class SignalController {
 
   public setAutoCycle(auto: boolean): void {
     this.autoCycle = auto;
+  }
+
+  public getLastSwitchReason(): SwitchReason {
+    return this.lastSwitchReason;
+  }
+
+  public getMaxGreenInterventionsCount(): number {
+    return this.maxGreenInterventions;
+  }
+
+  public resetMaxGreenInterventions(): void {
+    this.maxGreenInterventions = 0;
+  }
+
+  public getMaxGreenDuration(): number {
+    return this.config.maxGreenDuration;
+  }
+
+  public setMaxGreenDuration(durationSec: number): void {
+    this.config.maxGreenDuration = Math.max(this.config.minGreenDuration + 1.0, durationSec);
   }
 
   /**
@@ -82,13 +118,26 @@ export class SignalController {
 
     switch (this.phase) {
       case SignalPhase.NORTH_SOUTH_GREEN:
-        // Transition when default auto-timer expires or if a pending switch was requested
-        if (
-          (this.autoCycle && this.phaseElapsed >= this.config.defaultGreenDuration) ||
-          (this.pendingPhaseRequest !== null &&
-            this.pendingPhaseRequest !== SignalPhase.NORTH_SOUTH_GREEN &&
-            this.phaseElapsed >= this.config.minGreenDuration)
+        // 1. Authoritative maximum-green safeguard (prevents starvation even under HOLD-only policies)
+        if (this.phaseElapsed >= this.config.maxGreenDuration) {
+          this.maxGreenInterventions++;
+          this.lastSwitchReason = 'MAX_GREEN_SAFEGUARD';
+          this.pendingPhaseRequest = null;
+          this.transitionTo(SignalPhase.NORTH_SOUTH_YELLOW);
+        }
+        // 2. Fixed-time auto-cycle expiration
+        else if (this.autoCycle && this.phaseElapsed >= this.config.defaultGreenDuration) {
+          this.lastSwitchReason = 'AUTO_CYCLE';
+          this.transitionTo(SignalPhase.NORTH_SOUTH_YELLOW);
+        }
+        // 3. Pending switch request (DQN, Emergency, or Manual) past minimum green duration
+        else if (
+          this.pendingPhaseRequest !== null &&
+          this.pendingPhaseRequest !== SignalPhase.NORTH_SOUTH_GREEN &&
+          this.phaseElapsed >= this.config.minGreenDuration
         ) {
+          this.lastSwitchReason = this.pendingRequestReason || 'DQN_REQUEST';
+          this.pendingPhaseRequest = null;
           this.transitionTo(SignalPhase.NORTH_SOUTH_YELLOW);
         }
         break;
@@ -107,12 +156,26 @@ export class SignalController {
         break;
 
       case SignalPhase.EAST_WEST_GREEN:
-        if (
-          (this.autoCycle && this.phaseElapsed >= this.config.defaultGreenDuration) ||
-          (this.pendingPhaseRequest !== null &&
-            this.pendingPhaseRequest !== SignalPhase.EAST_WEST_GREEN &&
-            this.phaseElapsed >= this.config.minGreenDuration)
+        // 1. Authoritative maximum-green safeguard
+        if (this.phaseElapsed >= this.config.maxGreenDuration) {
+          this.maxGreenInterventions++;
+          this.lastSwitchReason = 'MAX_GREEN_SAFEGUARD';
+          this.pendingPhaseRequest = null;
+          this.transitionTo(SignalPhase.EAST_WEST_YELLOW);
+        }
+        // 2. Fixed-time auto-cycle expiration
+        else if (this.autoCycle && this.phaseElapsed >= this.config.defaultGreenDuration) {
+          this.lastSwitchReason = 'AUTO_CYCLE';
+          this.transitionTo(SignalPhase.EAST_WEST_YELLOW);
+        }
+        // 3. Pending switch request past minimum green duration
+        else if (
+          this.pendingPhaseRequest !== null &&
+          this.pendingPhaseRequest !== SignalPhase.EAST_WEST_GREEN &&
+          this.phaseElapsed >= this.config.minGreenDuration
         ) {
+          this.lastSwitchReason = this.pendingRequestReason || 'DQN_REQUEST';
+          this.pendingPhaseRequest = null;
           this.transitionTo(SignalPhase.EAST_WEST_YELLOW);
         }
         break;
@@ -139,23 +202,29 @@ export class SignalController {
 
   /**
    * Safely requests a switch to a desired green phase.
-   * If already in that phase, does nothing.
+   * If already in that phase, clears pending request and returns true.
    * If currently in an opposing green phase, begins yellow -> all-red sequence
    * respecting minGreenDuration.
    */
-  public requestPhase(targetGreenPhase: SignalPhase.NORTH_SOUTH_GREEN | SignalPhase.EAST_WEST_GREEN): boolean {
+  public requestPhase(
+    targetGreenPhase: SignalPhase.NORTH_SOUTH_GREEN | SignalPhase.EAST_WEST_GREEN,
+    reason: SwitchReason = 'DQN_REQUEST'
+  ): boolean {
     if (this.phase === targetGreenPhase) {
       this.pendingPhaseRequest = null;
       return true;
     }
 
     this.pendingPhaseRequest = targetGreenPhase;
+    this.pendingRequestReason = reason;
 
     // If currently in green and past minimum duration, initiate yellow transition immediately
     if (
       this.phase === SignalPhase.NORTH_SOUTH_GREEN &&
       this.phaseElapsed >= this.config.minGreenDuration
     ) {
+      this.lastSwitchReason = reason;
+      this.pendingPhaseRequest = null;
       this.transitionTo(SignalPhase.NORTH_SOUTH_YELLOW);
       return true;
     }
@@ -164,6 +233,8 @@ export class SignalController {
       this.phase === SignalPhase.EAST_WEST_GREEN &&
       this.phaseElapsed >= this.config.minGreenDuration
     ) {
+      this.lastSwitchReason = reason;
+      this.pendingPhaseRequest = null;
       this.transitionTo(SignalPhase.EAST_WEST_YELLOW);
       return true;
     }
@@ -175,5 +246,8 @@ export class SignalController {
     this.phase = SignalPhase.NORTH_SOUTH_GREEN;
     this.phaseElapsed = 0;
     this.pendingPhaseRequest = null;
+    this.pendingRequestReason = 'INITIAL';
+    this.lastSwitchReason = 'INITIAL';
+    this.maxGreenInterventions = 0;
   }
 }

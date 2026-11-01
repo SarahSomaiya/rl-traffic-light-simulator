@@ -193,7 +193,7 @@ export class TrafficEnvironment {
       ? SignalPhase.NORTH_SOUTH_GREEN
       : SignalPhase.EAST_WEST_GREEN;
 
-    return this.signalController.requestPhase(targetPhase);
+    return this.signalController.requestPhase(targetPhase, 'EMERGENCY_PRIORITY');
   }
 
   /**
@@ -455,7 +455,7 @@ export class TrafficEnvironment {
     const isNorthSouth = action === 0 || (action as unknown) === SignalPhase.NORTH_SOUTH_GREEN;
     const targetPhase = isNorthSouth ? SignalPhase.NORTH_SOUTH_GREEN : SignalPhase.EAST_WEST_GREEN;
 
-    return this.signalController.requestPhase(targetPhase);
+    return this.signalController.requestPhase(targetPhase, 'MANUAL_REQUEST');
   }
 
   /**

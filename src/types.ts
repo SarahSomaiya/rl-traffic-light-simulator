@@ -213,13 +213,20 @@ export interface EpisodeMetrics {
   totalReward: number;
   movingAverageReward?: number;
   averageWaitSec: number;
+  nsAverageWaitSec?: number;
+  ewAverageWaitSec?: number;
   vehiclesCleared: number;
   meanQueue: number;
+  nsMeanQueue?: number;
+  ewMeanQueue?: number;
   durationSec: number;
   epsilonAtEnd?: number;
   replayBufferSize?: number;
   averageLoss?: number;
   trainingUpdatesCount?: number;
+  holdCount?: number;
+  switchCount?: number;
+  maxGreenInterventions?: number;
 }
 
 export interface EvaluationComparisonResult {
